@@ -17,6 +17,10 @@ def _get_allowed_origins() -> list[str]:
         "http://localhost:4200",
         "http://127.0.0.1:4200",
         "http://0.0.0.0:4200",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://192.168.100.198:4200",
+        "http://192.168.100.198:3000",
     ]
 
 # Import models to register them with SQLAlchemy
