@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.course import Course
 from app.models.enrollment import Enrollment
+from app.models.chapter import Chapter
 
 router = APIRouter()
 
@@ -96,7 +97,8 @@ def enroll_student(student_id: int, course_id: int, db: Session = Depends(get_db
     enrollment = Enrollment(
         student_id=student_id,
         course_id=course_id,
-        is_active=True
+        is_active=True,
+        active_class_id=1  # Start with Class 1 for Online Sharia course
     )
     db.add(enrollment)
     db.commit()
@@ -147,3 +149,37 @@ def get_enrollments(db: Session = Depends(get_db)):
         })
 
     return result
+
+
+# Active class management endpoints
+@router.put("/enrollments/{enrollment_id}/active-class")
+def update_student_active_class(
+    enrollment_id: int,
+    active_class_id: int,
+    db: Session = Depends(get_db)
+):
+    """Update a student's active class (Admin only)"""
+    # Verify enrollment exists
+    enrollment = db.query(Enrollment).filter(Enrollment.id == enrollment_id).first()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    # Verify the chapter exists and belongs to the enrolled course
+    chapter = db.query(Chapter).filter(
+        Chapter.id == active_class_id,
+        Chapter.course_id == enrollment.course_id
+    ).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found in this course")
+
+    # Update the active class
+    enrollment.active_class_id = active_class_id
+    db.commit()
+
+    return {
+        "message": "Student's active class updated successfully",
+        "enrollment_id": enrollment_id,
+        "student_id": enrollment.student_id,
+        "active_class_id": active_class_id,
+        "active_class_title": chapter.title
+    }

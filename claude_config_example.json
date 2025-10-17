@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "osa-academy": {
+      "command": "python",
+      "args": [
+        "/Users/mujthabamk/Desktop/real-world-projects/osa/OSA/osa-backend/osa_mcp_server.py"
+      ],
+      "env": {
+        "OSA_BASE_URL": "http://localhost:8001",
+        "OSA_API_KEY": "your-admin-jwt-token-here"
+      }
+    }
+  }
+}

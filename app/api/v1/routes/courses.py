@@ -8,20 +8,12 @@ from app.models.course import Course
 from app.models.user import User
 from app.models.chapter import Chapter, Attachment, Quiz, QuizQuestion, LessonProgress
 from app.models.live_class import LiveClass
+from app.models.enrollment import Enrollment
 from app.services.courses import create_course
 import json
 from datetime import datetime
 
-router = APIRouter(prefix="/courses", tags=["courses"])
-
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/")
-def list_courses():
-    return {"message": "Courses endpoint - coming soon"}
-
+router = APIRouter(tags=["courses"])
 
 @router.get("/", response_model=List[CourseRead])
 def list_courses(db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -52,6 +44,23 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
             "full_name": teacher.full_name,
             "role": teacher.role
         }
+
+    # Get student's active class if enrolled
+    active_class_data = None
+    if current_user.role == "student":
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.course_id == course_id,
+            Enrollment.is_active == True
+        ).first()
+        if enrollment and enrollment.active_class_id:
+            active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
+            if active_chapter:
+                active_class_data = {
+                    "id": active_chapter.id,
+                    "title": active_chapter.title,
+                    "description": active_chapter.description
+                }
 
     # Get chapters
     chapters = db.query(Chapter).filter(Chapter.course_id == course_id).order_by(Chapter.order).all()
@@ -93,7 +102,7 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
                 progress = {
                     "completed": progress.completed,
                     "quiz_score": progress.quiz_score,
-                    "completed_at": progress.completed_at
+                    "completed_at": progress.completed_at.isoformat() if progress.completed_at else None
                 }
 
         chapters_data.append({
@@ -140,7 +149,8 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
         "description": course.description,
         "teacher_id": course.teacher_id,
         "teacher": teacher_data,
-        "created_at": course.created_at,
+        "active_class": active_class_data,
+        "created_at": course.created_at.isoformat() if course.created_at else None,
         "chapters": chapters_data,
         "live_classes": live_classes_data
     }

@@ -25,6 +25,11 @@ def _get_allowed_origins() -> list[str]:
 
 # Import models to register them with SQLAlchemy
 from app.models.user import User
+from app.models.course import Course
+from app.models.chapter import Chapter, Attachment, Quiz, QuizQuestion, LessonProgress
+from app.models.enrollment import Enrollment
+from app.models.live_class import LiveClass
+from app.models.note import Note
 
 # Create all tables
 Base.metadata.create_all(bind=engine)

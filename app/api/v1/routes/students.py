@@ -133,9 +133,24 @@ def get_student_progress(student_id: int, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # TODO: Implement actual progress tracking
-    # For now, return empty progress
-    return []
+    # Get all lesson progress for the student
+    from app.models.chapter import LessonProgress
+    progress_records = db.query(LessonProgress).filter(LessonProgress.student_id == student_id).all()
+
+    progress_data = []
+    for progress in progress_records:
+        # Get chapter information
+        chapter = db.query(Chapter).filter(Chapter.id == progress.chapter_id).first()
+        if chapter:
+            progress_data.append({
+                "chapter_id": progress.chapter_id,
+                "chapter_title": chapter.title,
+                "completed": progress.completed,
+                "quiz_score": progress.quiz_score,
+                "completed_at": progress.completed_at.isoformat() if progress.completed_at else None
+            })
+
+    return progress_data
 
 @router.patch("/progress/{course_id}")
 def update_student_progress(course_id: int, progress: int, db: Session = Depends(get_db)):
@@ -161,6 +176,28 @@ def get_enrolled_courses(user_id: int, db: Session = Depends(get_db)):
     for enrollment in enrollments:
         course = db.query(Course).filter(Course.id == enrollment.course_id).first()
         if course:
+            # Get active class information
+            active_class_title = None
+            if enrollment.active_class_id:
+                active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
+                if active_chapter:
+                    active_class_title = active_chapter.title
+
+            # Calculate progress statistics
+            from app.models.chapter import LessonProgress
+            course_chapters = db.query(Chapter).filter(Chapter.course_id == course.id).all()
+            total_lessons = len(course_chapters)
+            
+            completed_progress = db.query(LessonProgress).filter(
+                LessonProgress.student_id == user_id,
+                LessonProgress.chapter_id.in_([c.id for c in course_chapters]),
+                LessonProgress.completed == True
+            ).all()
+            completed_lessons = len(completed_progress)
+            
+            # Calculate overall progress percentage
+            progress_percentage = (completed_lessons / total_lessons * 100) if total_lessons > 0 else 0
+
             enrolled_courses.append({
                 "course_id": course.id,
                 "id": course.id,
@@ -169,9 +206,11 @@ def get_enrolled_courses(user_id: int, db: Session = Depends(get_db)):
                 "description": course.description,
                 "teacher_id": course.teacher_id,
                 "enrolled_at": enrollment.enrolled_at,
-                "progress": 0,
-                "completed_lessons": 0,
-                "total_lessons": 0,
+                "active_class_id": enrollment.active_class_id,
+                "active_class_title": active_class_title,
+                "progress": progress_percentage,
+                "completed_lessons": completed_lessons,
+                "total_lessons": total_lessons,
                 "last_accessed": enrollment.enrolled_at.isoformat() if enrollment.enrolled_at else ""
             })
 
@@ -204,7 +243,7 @@ def get_academic_report(child_id: int, db: Session = Depends(get_db)):
 
 # Course and Chapter endpoints
 @router.get("/courses/{course_id}")
-def get_course_details(course_id: int, db: Session = Depends(get_db)):
+def get_course_details(course_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get detailed course information including chapters and attachments"""
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
@@ -218,6 +257,23 @@ def get_course_details(course_id: int, db: Session = Depends(get_db)):
         Attachment.course_id == course_id,
         Attachment.chapter_id.is_(None)
     ).all()
+
+    # Get active class information for enrolled students
+    active_class = None
+    if current_user.role == "student":
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.course_id == course_id,
+            Enrollment.is_active == True
+        ).first()
+        if enrollment and enrollment.active_class_id:
+            active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
+            if active_chapter:
+                active_class = {
+                    "id": active_chapter.id,
+                    "title": active_chapter.title,
+                    "description": active_chapter.description
+                }
 
     chapters_data = []
     for chapter in chapters:
@@ -243,7 +299,7 @@ def get_course_details(course_id: int, db: Session = Depends(get_db)):
             ]
         })
 
-    return {
+    response = {
         "id": course.id,
         "title": course.title,
         "description": course.description,
@@ -263,6 +319,12 @@ def get_course_details(course_id: int, db: Session = Depends(get_db)):
             for attachment in course_attachments
         ]
     }
+
+    # Add active_class if user is enrolled
+    if active_class:
+        response["active_class"] = active_class
+
+    return response
 
 # Notes endpoints (updated to be course/chapter based)
 @router.get("/courses/{course_id}/notes")
