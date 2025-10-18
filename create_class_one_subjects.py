@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
-from app.models.chapter import Chapter, Attachment
+from app.models.chapter import Chapter, Attachment, Subject
 from app.models.course import Course
 from app.models.user import User
 from datetime import datetime, timedelta
@@ -133,33 +133,52 @@ def create_class_one_subjects():
 
         print(f"Adding subjects to course: {course.title}")
 
-        # Create chapters for each subject
-        chapter_order = 1
-        created_chapters = []
+        # Create subjects and their chapters
+        subject_order = 1
+        created_subjects = []
 
         for subject_name, subject_data in SUBJECTS.items():
-            chapter = Chapter(
+            # Create the subject
+            subject = Subject(
                 course_id=course.id,
-                title=f"Class One - {subject_name}",
+                title=subject_name,
                 description=subject_data["description"],
-                order=chapter_order
+                order=subject_order
             )
-            db.add(chapter)
-            created_chapters.append((chapter, subject_data))
-            chapter_order += 1
+            db.add(subject)
+            db.flush()  # Get the subject ID
+            
+            # Create chapters for this subject
+            chapter_order = 1
+            created_chapters = []
+            for video in subject_data["videos"]:
+                chapter = Chapter(
+                    subject_id=subject.id,
+                    title=video["title"],
+                    description=f"40-minute video lesson for {subject_name}",
+                    order=chapter_order
+                )
+                db.add(chapter)
+                created_chapters.append(chapter)
+                chapter_order += 1
+            
+            created_subjects.append((subject, created_chapters))
+            subject_order += 1
 
         db.commit()
-        print(f"Created {len(created_chapters)} subject chapters")
+        print(f"Created {len(created_subjects)} subjects with chapters")
 
         # Create video attachments for each chapter
         total_attachments = 0
-        for chapter, subject_data in created_chapters:
-            for video in subject_data["videos"]:
+        for subject, chapters in created_subjects:
+            subject_data = SUBJECTS[subject.title]
+            for i, chapter in enumerate(chapters):
+                video = subject_data["videos"][i]
                 attachment = Attachment(
                     course_id=course.id,
                     chapter_id=chapter.id,
                     title=video["title"],
-                    description=f"40-minute video lesson for {chapter.title}",
+                    description=f"40-minute video lesson for {subject.title}",
                     file_url=video["url"],
                     file_type="video",
                     source="youtube",
@@ -195,7 +214,9 @@ def create_class_one_subjects():
             print(f"Day {day_info['day']}: {subject1} + {subject2}")
 
         print("\nClass One subjects and schedule created successfully!")
-        print(f"Total chapters: {len(created_chapters)}")
+        total_chapters = sum(len(chapters) for _, chapters in created_subjects)
+        print(f"Total subjects: {len(created_subjects)}")
+        print(f"Total chapters: {total_chapters}")
         print(f"Total video lessons: {total_attachments}")
 
     except Exception as e:

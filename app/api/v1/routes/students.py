@@ -10,6 +10,9 @@ from app.models.enrollment import Enrollment
 from app.models.chapter import Chapter
 from app.models.chapter import Attachment
 from app.models.live_class import LiveClass
+from app.models.subject import Subject
+from app.models.session import Session
+from app.models.class_model import Class
 from app.api.v1.deps import get_current_user
 
 # Pydantic models for request bodies
@@ -133,20 +136,22 @@ def get_student_progress(student_id: int, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Get all lesson progress for the student
-    from app.models.chapter import LessonProgress
-    progress_records = db.query(LessonProgress).filter(LessonProgress.student_id == student_id).all()
+    # Get all class progress for the student
+    from app.models.class_progress import ClassProgress
+    progress_records = db.query(ClassProgress).filter(ClassProgress.student_id == student_id).all()
 
     progress_data = []
     for progress in progress_records:
-        # Get chapter information
-        chapter = db.query(Chapter).filter(Chapter.id == progress.chapter_id).first()
-        if chapter:
+        # Get session and subject information
+        session = db.query(Session).filter(Session.id == progress.session_id).first()
+        subject = db.query(Subject).filter(Subject.id == progress.subject_id).first()
+        if session and subject:
             progress_data.append({
-                "chapter_id": progress.chapter_id,
-                "chapter_title": chapter.title,
+                "session_id": progress.session_id,
+                "session_title": session.title,
+                "subject_name": subject.name,
                 "completed": progress.completed,
-                "quiz_score": progress.quiz_score,
+                "score": progress.score,
                 "completed_at": progress.completed_at.isoformat() if progress.completed_at else None
             })
 
@@ -158,45 +163,42 @@ def update_student_progress(course_id: int, progress: int, db: Session = Depends
     # TODO: Implement actual progress update
     return {"message": "Progress updated", "course_id": course_id, "progress": progress}
 
-@router.get("/{user_id}/enrolled-courses")
-def get_enrolled_courses(user_id: int, db: Session = Depends(get_db)):
+@router.get("/{student_id}/enrolled-courses")
+def get_enrolled_courses(student_id: int, db: Session = Depends(get_db)):
     """Get courses enrolled by a user"""
     # Verify user exists and is a student
-    user = db.query(User).filter(User.id == user_id, User.role == "student").first()
+    user = db.query(User).filter(User.id == student_id, User.role == "student").first()
     if not user:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Get enrolled courses
+    # Get enrolled courses (one enrollment per course)
     enrollments = db.query(Enrollment).filter(
-        Enrollment.student_id == user_id,
+        Enrollment.student_id == student_id,
         Enrollment.is_active == True
     ).all()
 
-    enrolled_courses = []
+    # Group by course_id to avoid duplicates
+    courses_dict = {}
     for enrollment in enrollments:
-        course = db.query(Course).filter(Course.id == enrollment.course_id).first()
-        if course:
-            # Get active class information
-            active_class_title = None
-            if enrollment.active_class_id:
-                active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
-                if active_chapter:
-                    active_class_title = active_chapter.title
+        if enrollment.course_id not in courses_dict:
+            courses_dict[enrollment.course_id] = enrollment
 
-            # Calculate progress statistics
-            from app.models.chapter import LessonProgress
-            course_chapters = db.query(Chapter).filter(Chapter.course_id == course.id).all()
-            total_lessons = len(course_chapters)
-            
-            completed_progress = db.query(LessonProgress).filter(
-                LessonProgress.student_id == user_id,
-                LessonProgress.chapter_id.in_([c.id for c in course_chapters]),
-                LessonProgress.completed == True
-            ).all()
-            completed_lessons = len(completed_progress)
-            
-            # Calculate overall progress percentage
-            progress_percentage = (completed_lessons / total_lessons * 100) if total_lessons > 0 else 0
+    enrolled_courses = []
+    for course_id, enrollment in courses_dict.items():
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if course:
+            # Get the active class for this enrollment
+            active_class = None
+            active_class_title = None
+            if enrollment.class_id:
+                active_class = db.query(Class).filter(Class.id == enrollment.class_id).first()
+                if active_class:
+                    active_class_title = active_class.name
+
+            # Calculate progress for the enrolled class only
+            progress_percentage = 0
+            total_sessions = 0
+            completed_sessions = 0
 
             enrolled_courses.append({
                 "course_id": course.id,
@@ -206,11 +208,17 @@ def get_enrolled_courses(user_id: int, db: Session = Depends(get_db)):
                 "description": course.description,
                 "teacher_id": course.teacher_id,
                 "enrolled_at": enrollment.enrolled_at,
-                "active_class_id": enrollment.active_class_id,
+                "active_class": {
+                    "id": active_class.id if active_class else None,
+                    "name": active_class.name if active_class else None,
+                    "year": active_class.year if active_class else None
+                } if active_class else None,
+                "active_class_id": enrollment.class_id,
                 "active_class_title": active_class_title,
                 "progress": progress_percentage,
-                "completed_lessons": completed_lessons,
-                "total_lessons": total_lessons,
+                "progress_percentage": progress_percentage,
+                "completed_lessons": completed_sessions,
+                "total_lessons": total_sessions,
                 "last_accessed": enrollment.enrolled_at.isoformat() if enrollment.enrolled_at else ""
             })
 
@@ -648,3 +656,142 @@ def get_student_timetable(student_id: int, date: str = None, db: Session = Depen
         })
 
     return result
+
+@router.get("/{student_id}/calendar")
+def get_student_calendar(student_id: int, db: Session = Depends(get_db)):
+    """Get daily calendar view of lessons for a student's enrolled courses"""
+    # Verify student exists
+    student = db.query(User).filter(User.id == student_id, User.role == "student").first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Get enrolled courses
+    enrollments = db.query(Enrollment).filter(
+        Enrollment.student_id == student_id,
+        Enrollment.is_active == True
+    ).all()
+
+    course_ids = [e.course_id for e in enrollments]
+
+    if not course_ids:
+        return {"days": []}
+
+    # Get lessons grouped by date
+    from app.models.lesson import Lesson
+    from app.models.lesson_content import LessonContent
+    from app.models.subject import Subject
+
+    lessons_query = db.query(Lesson).filter(Lesson.course_id.in_(course_ids)).order_by(Lesson.scheduled_date, Lesson.order_in_course)
+
+    # Group lessons by date
+    days_dict = {}
+    for lesson in lessons_query:
+        date_str = lesson.scheduled_date.isoformat()
+        if date_str not in days_dict:
+            days_dict[date_str] = {
+                "date": date_str,
+                "lessons": []
+            }
+
+        # Get subject info
+        subject = db.query(Subject).filter(Subject.id == lesson.subject_id).first()
+        subject_name = subject.name if subject else "Unknown"
+
+        # Get lesson content
+        content_items = db.query(LessonContent).filter(
+            LessonContent.lesson_id == lesson.id
+        ).order_by(LessonContent.order_in_lesson).all()
+
+        content = []
+        for item in content_items:
+            content.append({
+                "id": item.id,
+                "type": item.content_type,
+                "title": item.title,
+                "url": item.content_url,
+                "text": item.content_text
+            })
+
+        lesson_data = {
+            "id": lesson.id,
+            "title": lesson.title,
+            "subject": subject_name,
+            "description": lesson.description,
+            "content": content
+        }
+
+        days_dict[date_str]["lessons"].append(lesson_data)
+
+    # Convert to list and sort by date
+    days = list(days_dict.values())
+    days.sort(key=lambda x: x["date"])
+
+    return {"days": days}
+
+@router.get("/{student_id}/lessons-by-subject")
+def get_lessons_by_subject(student_id: int, db: Session = Depends(get_db)):
+    """Get lessons organized by subject for a student's enrolled courses"""
+    # Verify student exists
+    student = db.query(User).filter(User.id == student_id, User.role == "student").first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Get enrolled courses
+    enrollments = db.query(Enrollment).filter(
+        Enrollment.student_id == student_id,
+        Enrollment.is_active == True
+    ).all()
+
+    course_ids = [e.course_id for e in enrollments]
+
+    if not course_ids:
+        return {"subjects": []}
+
+    # Get all subjects for enrolled courses
+    from app.models.subject import Subject
+    subjects = db.query(Subject).filter(Subject.course_id.in_(course_ids)).order_by(Subject.order_in_course).all()
+
+    subjects_data = []
+    for subject in subjects:
+        # Get lessons for this subject
+        from app.models.lesson import Lesson
+        from app.models.lesson_content import LessonContent
+
+        lessons = db.query(Lesson).filter(
+            Lesson.course_id.in_(course_ids),
+            Lesson.subject_id == subject.id
+        ).order_by(Lesson.scheduled_date).all()
+
+        lessons_data = []
+        for lesson in lessons:
+            # Get lesson content
+            content_items = db.query(LessonContent).filter(
+                LessonContent.lesson_id == lesson.id
+            ).order_by(LessonContent.order_in_lesson).all()
+
+            content = []
+            for item in content_items:
+                content.append({
+                    "id": item.id,
+                    "type": item.content_type,
+                    "title": item.title,
+                    "url": item.content_url,
+                    "text": item.content_text
+                })
+
+            lessons_data.append({
+                "id": lesson.id,
+                "title": lesson.title,
+                "date": lesson.scheduled_date.isoformat(),
+                "description": lesson.description,
+                "content": content
+            })
+
+        subjects_data.append({
+            "id": subject.id,
+            "name": subject.name,
+            "description": subject.description,
+            "lessons": lessons_data
+        })
+
+    return {"subjects": subjects_data}

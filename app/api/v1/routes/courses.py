@@ -7,8 +7,10 @@ from app.schemas.course import CourseCreate, CourseRead
 from app.models.course import Course
 from app.models.user import User
 from app.models.chapter import Chapter, Attachment, Quiz, QuizQuestion, LessonProgress
+from app.models.subject import Subject
 from app.models.live_class import LiveClass
 from app.models.enrollment import Enrollment
+from app.models.class_model import Class
 from app.services.courses import create_course
 import json
 from datetime import datetime
@@ -53,75 +55,70 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
             Enrollment.course_id == course_id,
             Enrollment.is_active == True
         ).first()
-        if enrollment and enrollment.active_class_id:
-            active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
-            if active_chapter:
+        if enrollment and enrollment.class_id:
+            active_class = db.query(Class).filter(Class.id == enrollment.class_id).first()
+            if active_class:
                 active_class_data = {
-                    "id": active_chapter.id,
-                    "title": active_chapter.title,
-                    "description": active_chapter.description
+                    "id": active_class.id,
+                    "year": active_class.year,
+                    "name": active_class.name,
+                    "is_active": active_class.is_active
                 }
 
-    # Get chapters
-    chapters = db.query(Chapter).filter(Chapter.course_id == course_id).order_by(Chapter.order).all()
+    # Get classes for this course
+    classes = db.query(Class).filter(Class.course_id == course_id).order_by(Class.year).all()
 
-    chapters_data = []
-    for chapter in chapters:
-        # Get attachments for this chapter
-        attachments = db.query(Attachment).filter(Attachment.chapter_id == chapter.id).order_by(Attachment.id).all()
+    classes_data = []
+    for class_obj in classes:
+        # For the new structure, classes don't have subjects directly
+        # Subjects now belong to courses
+        classes_data.append({
+            "id": class_obj.id,
+            "year": class_obj.year,
+            "name": class_obj.name,
+            "is_active": class_obj.is_active,
+            "subjects": []  # Classes no longer have subjects directly
+        })
 
-        # Get quiz for this chapter
-        quiz = db.query(Quiz).filter(Quiz.chapter_id == chapter.id).first()
-        quiz_data = None
-        if quiz:
-            questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz.id).order_by(QuizQuestion.order).all()
-            quiz_data = {
-                "id": quiz.id,
-                "title": quiz.title,
-                "description": quiz.description,
-                "passing_score": quiz.passing_score,
-                "questions": [
-                    {
-                        "id": q.id,
-                        "question": q.question,
-                        "options": json.loads(q.options),
-                        "correct_answer": q.correct_answer,
-                        "order": q.order
-                    } for q in questions
-                ]
-            }
+    # Get subjects for this course (new structure)
+    subjects = db.query(Subject).filter(Subject.course_id == course_id).order_by(Subject.order_in_course).all()
 
-        # Get progress for current user
-        progress = None
-        if current_user.role == "student":
-            progress = db.query(LessonProgress).filter(
-                LessonProgress.student_id == current_user.id,
-                LessonProgress.chapter_id == chapter.id
-            ).first()
-            if progress:
-                progress = {
-                    "completed": progress.completed,
-                    "quiz_score": progress.quiz_score,
-                    "completed_at": progress.completed_at.isoformat() if progress.completed_at else None
-                }
+    subjects_data = []
+    for subject in subjects:
+        # Get lessons for this subject
+        from app.models.lesson import Lesson
+        from app.models.lesson_content import LessonContent
 
-        chapters_data.append({
-            "id": chapter.id,
-            "title": chapter.title,
-            "description": chapter.description,
-            "order": chapter.order,
-            "attachments": [
-                {
-                    "id": att.id,
-                    "title": att.title,
-                    "file_type": att.file_type,
-                    "file_url": att.file_url,
-                    "source": att.source,
-                    "description": att.description
-                } for att in attachments
-            ],
-            "quiz": quiz_data,
-            "progress": progress
+        lessons = db.query(Lesson).filter(Lesson.subject_id == subject.id).order_by(Lesson.scheduled_date, Lesson.order_in_course).all()
+
+        lessons_data = []
+        for lesson in lessons:
+            # Get lesson content
+            contents = db.query(LessonContent).filter(LessonContent.lesson_id == lesson.id).order_by(LessonContent.order_in_lesson).all()
+
+            lessons_data.append({
+                "id": lesson.id,
+                "title": lesson.title,
+                "description": lesson.description,
+                "scheduled_date": lesson.scheduled_date.isoformat() if lesson.scheduled_date else None,
+                "order_in_course": lesson.order_in_course,
+                "contents": [{
+                    "id": content.id,
+                    "title": content.title,
+                    "content_type": content.content_type,
+                    "content_url": content.content_url,
+                    "content_text": content.content_text,
+                    "order_in_lesson": content.order_in_lesson
+                } for content in contents]
+            })
+
+        subjects_data.append({
+            "id": subject.id,
+            "name": subject.name,
+            "description": subject.description,
+            "instructor_id": subject.instructor_id,
+            "order_in_course": subject.order_in_course,
+            "lessons": lessons_data
         })
 
     # Get live classes for this course
@@ -151,80 +148,7 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
         "teacher": teacher_data,
         "active_class": active_class_data,
         "created_at": course.created_at.isoformat() if course.created_at else None,
-        "chapters": chapters_data,
+        "classes": classes_data,
+        "subjects": subjects_data,
         "live_classes": live_classes_data
-    }
-
-@router.post("/{course_id}/chapters/{chapter_id}/complete")
-def complete_lesson(course_id: int, chapter_id: int, quiz_score: int = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """Mark a lesson as completed"""
-    if current_user.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can complete lessons")
-
-    # Verify chapter belongs to course
-    chapter = db.query(Chapter).filter(Chapter.id == chapter_id, Chapter.course_id == course_id).first()
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-
-    # Check if quiz exists and score meets requirements
-    quiz = db.query(Quiz).filter(Quiz.chapter_id == chapter_id).first()
-    if quiz and quiz_score is not None and quiz_score < quiz.passing_score:
-        raise HTTPException(status_code=400, detail=f"Quiz score {quiz_score}% does not meet passing score of {quiz.passing_score}%")
-
-    # Update or create progress
-    progress = db.query(LessonProgress).filter(
-        LessonProgress.student_id == current_user.id,
-        LessonProgress.chapter_id == chapter_id
-    ).first()
-
-    from datetime import datetime
-    if progress:
-        progress.completed = True
-        progress.quiz_score = quiz_score
-        progress.completed_at = datetime.utcnow()
-    else:
-        new_progress = LessonProgress(
-            student_id=current_user.id,
-            chapter_id=chapter_id,
-            completed=True,
-            quiz_score=quiz_score,
-            completed_at=datetime.utcnow()
-        )
-        db.add(new_progress)
-
-    db.commit()
-    return {"message": "Lesson completed successfully"}
-
-@router.get("/{course_id}/progress")
-def get_course_progress(course_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """Get student's progress for a course"""
-    if current_user.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can view progress")
-
-    # Get all chapters for the course
-    chapters = db.query(Chapter).filter(Chapter.course_id == course_id).all()
-    total_chapters = len(chapters)
-
-    # Get completed chapters
-    completed_progress = db.query(LessonProgress).filter(
-        LessonProgress.student_id == current_user.id,
-        LessonProgress.chapter_id.in_([c.id for c in chapters]),
-        LessonProgress.completed == True
-    ).all()
-
-    completed_chapters = len(completed_progress)
-    progress_percentage = (completed_chapters / total_chapters * 100) if total_chapters > 0 else 0
-
-    return {
-        "course_id": course_id,
-        "total_chapters": total_chapters,
-        "completed_chapters": completed_chapters,
-        "progress_percentage": round(progress_percentage, 1),
-        "completed_lessons": [
-            {
-                "chapter_id": p.chapter_id,
-                "quiz_score": p.quiz_score,
-                "completed_at": p.completed_at
-            } for p in completed_progress
-        ]
     }

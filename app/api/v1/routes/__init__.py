@@ -1,1 +1,1 @@
-from . import auth, users, courses, parents, students, admin
+from . import auth, users, courses, school, parents, students, admin, subjects, lessons, class_sessions

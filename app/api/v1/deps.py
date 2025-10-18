@@ -20,9 +20,9 @@ def get_current_user(authorization: Optional[str] = Header(None), db: Session = 
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-def require_role(role: str):
+def require_role(*allowed_roles: str):
     def inner(user: User = Depends(get_current_user)):
-        if user.role != role and user.role != "admin":
+        if user.role not in allowed_roles and user.role != "admin":
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user
     return inner
