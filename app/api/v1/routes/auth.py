@@ -35,7 +35,8 @@ def login(dto: LoginDTO, db: Session = Depends(get_db)):
                                  "id": user.id,
                                  "role": user.role})
 
-    return {"token": token,
+    return {"access_token": token,
+            "token_type": "bearer",
             "user": {"id": user.id, "email": user.email,
                      "fullName": user.full_name, "role": user.role}}
 
