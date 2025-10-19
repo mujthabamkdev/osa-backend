@@ -13,6 +13,10 @@ from .enrollment import Enrollment
 from .note import Note
 from .live_class import LiveClass
 from .chapter import Chapter, Attachment
+from .exam import Exam
+from .exam_result import ExamResult
+from .lesson_question import LessonQuestion
+from .lesson_answer import LessonAnswer
 
 # Configure deferred relationships after all models are imported
 # Temporarily disabled to avoid mapper initialization issues
@@ -49,4 +53,8 @@ __all__ = [
   "LiveClass",
   "Chapter",
   "Attachment",
+  "Exam",
+  "ExamResult",
+  "LessonQuestion",
+  "LessonAnswer",
 ]
