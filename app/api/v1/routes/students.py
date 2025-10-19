@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -12,7 +13,12 @@ from app.models.chapter import Attachment
 from app.models.live_class import LiveClass
 from app.models.subject import Subject
 from app.models.session import Session
+from app.models.lesson import Lesson
 from app.models.class_model import Class
+from app.models.exam import Exam
+from app.models.exam_result import ExamResult
+from app.models.lesson_question import LessonQuestion
+from app.models.lesson_answer import LessonAnswer
 from app.api.v1.deps import get_current_user
 
 # Pydantic models for request bodies
@@ -30,6 +36,35 @@ class NoteRequest(BaseModel):
 
     class Config:
         validate_assignment = True
+
+
+class LessonQuestionRequest(BaseModel):
+    question: str
+    is_anonymous: Optional[bool] = False
+
+
+class LessonQuestionResponse(BaseModel):
+    id: int
+    question: str
+    is_anonymous: bool
+    answer: Optional[str]
+    answered_at: Optional[datetime]
+    created_at: datetime
+    asked_by: Optional[int] = None
+
+
+class ExamResultResponse(BaseModel):
+    exam_id: int
+    title: str
+    description: str
+    scheduled_date: Optional[datetime]
+    score: Optional[int]
+    max_score: Optional[int]
+    status: Optional[str]
+    feedback: Optional[str]
+    published_at: Optional[datetime]
+    course_id: int
+    course_title: str
 
 router = APIRouter()
 
@@ -795,3 +830,153 @@ def get_lessons_by_subject(student_id: int, db: Session = Depends(get_db)):
         })
 
     return {"subjects": subjects_data}
+
+
+@router.post("/lessons/{lesson_id}/questions", response_model=LessonQuestionResponse, status_code=201)
+def ask_lesson_question(
+    lesson_id: int,
+    payload: LessonQuestionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "student":
+        raise HTTPException(status_code=403, detail="Only students can ask questions")
+
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    subject = db.query(Subject).filter(Subject.id == lesson.subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    course = db.query(Course).filter(Course.id == subject.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    enrollment = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.course_id == course.id,
+            Enrollment.student_id == current_user.id,
+            Enrollment.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+
+    question = LessonQuestion(
+        lesson_id=lesson_id,
+        student_id=current_user.id,
+        question=payload.question,
+        is_anonymous=bool(payload.is_anonymous),
+    )
+
+    db.add(question)
+    db.commit()
+    db.refresh(question)
+
+    return LessonQuestionResponse(
+        id=question.id,
+        question=question.question,
+        is_anonymous=question.is_anonymous,
+        answer=None,
+        answered_at=None,
+        created_at=question.created_at,
+        asked_by=None if question.is_anonymous else question.student_id,
+    )
+
+
+@router.get("/lessons/{lesson_id}/questions", response_model=List[LessonQuestionResponse])
+def list_lesson_questions_for_student(
+    lesson_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    subject = db.query(Subject).filter(Subject.id == lesson.subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    course = db.query(Course).filter(Course.id == subject.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    if current_user.role == "student":
+        enrollment = (
+            db.query(Enrollment)
+            .filter(
+                Enrollment.course_id == course.id,
+                Enrollment.student_id == current_user.id,
+                Enrollment.is_active == True,  # noqa: E712
+            )
+            .first()
+        )
+        if not enrollment:
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+
+    rows = (
+        db.query(LessonQuestion, LessonAnswer)
+        .outerjoin(LessonAnswer, LessonAnswer.question_id == LessonQuestion.id)
+        .filter(LessonQuestion.lesson_id == lesson_id)
+        .order_by(LessonQuestion.created_at.desc())
+        .all()
+    )
+
+    responses: List[LessonQuestionResponse] = []
+    for question, answer in rows:
+        responses.append(
+            LessonQuestionResponse(
+                id=question.id,
+                question=question.question,
+                is_anonymous=question.is_anonymous,
+                answer=answer.answer if answer else None,
+                answered_at=answer.created_at if answer else None,
+                created_at=question.created_at,
+                asked_by=None if question.is_anonymous else question.student_id,
+            )
+        )
+
+    return responses
+
+
+@router.get("/me/exams", response_model=List[ExamResultResponse])
+def get_my_exam_results(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "student":
+        raise HTTPException(status_code=403, detail="Only students can view exam results")
+
+    results = (
+        db.query(ExamResult, Exam, Course)
+        .join(Exam, Exam.id == ExamResult.exam_id)
+        .join(Course, Course.id == Exam.course_id)
+        .filter(
+            ExamResult.student_id == current_user.id,
+            Exam.is_published == True,  # noqa: E712
+        )
+        .order_by(Exam.scheduled_date.desc().nullslast(), Exam.created_at.desc())
+        .all()
+    )
+
+    return [
+        ExamResultResponse(
+            exam_id=exam.id,
+            title=exam.title,
+            description=exam.description,
+            scheduled_date=exam.scheduled_date,
+            score=result.score,
+            max_score=result.max_score,
+            status=result.status,
+            feedback=result.feedback,
+            published_at=result.published_at,
+            course_id=course.id,
+            course_title=course.title,
+        )
+        for result, exam, course in results
+    ]

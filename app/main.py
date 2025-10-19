@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api.v1.routes import auth, users, courses, parents, students, admin, school, subjects, lessons, class_sessions
+from app.api.v1.routes import auth, users, courses, parents, students, admin, school, subjects, lessons, class_sessions, teachers
 
 
 def _get_allowed_origins() -> list[str]:
@@ -39,6 +39,10 @@ from app.models.enrollment import Enrollment
 from app.models.live_class import LiveClass
 from app.models.note import Note
 from app.models.chapter import Chapter, Attachment, Quiz, QuizQuestion, LessonProgress
+from app.models.exam import Exam
+from app.models.exam_result import ExamResult
+from app.models.lesson_question import LessonQuestion
+from app.models.lesson_answer import LessonAnswer
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
@@ -69,6 +73,7 @@ app.include_router(school.router, prefix="/api/v1/school", tags=["School"])
 app.include_router(parents.router, prefix="/api/v1/parents", tags=["Parents"])
 app.include_router(students.router, prefix="/api/v1/students", tags=["Students"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
+app.include_router(teachers.router, prefix="/api/v1/teachers", tags=["Teachers"])
 
 
 @app.get("/")

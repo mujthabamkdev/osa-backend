@@ -26,7 +26,7 @@ from sqlalchemy.dialects import sqlite
 
 # revision identifiers, used by Alembic.
 revision = '0005_restructure_course_hierarchy'
-down_revision = '0004_add_source_to_attachment'
+down_revision = '0004'
 branch_labels = None
 depends_on = None
 
