@@ -1,5 +1,7 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from datetime import date
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 
 class SubjectBase(BaseModel):
@@ -20,6 +22,7 @@ class SubjectRead(SubjectBase):
 class LessonBase(BaseModel):
   title: str
   description: Optional[str] = None
+  scheduled_date: date = Field(default_factory=date.today)
   order_in_subject: int = 1
 
 
@@ -29,6 +32,13 @@ class LessonRead(LessonBase):
 
   class Config:
     from_attributes = True
+
+
+class LessonUpdate(BaseModel):
+  title: Optional[str] = None
+  description: Optional[str] = None
+  scheduled_date: Optional[date] = None
+  order_in_subject: Optional[int] = None
 
 
 class ClassSessionBase(BaseModel):
@@ -82,6 +92,35 @@ class SubjectCreate(SubjectBase):
 
 class LessonCreate(LessonBase):
   subject_id: int
+  course_id: Optional[int] = None
+
+
+class LessonContentBase(BaseModel):
+  lesson_id: int
+  title: str
+  content_type: str
+  content_url: Optional[str] = None
+  content_text: Optional[str] = None
+  order_in_lesson: int = 1
+
+
+class LessonContentCreate(LessonContentBase):
+  pass
+
+
+class LessonContentUpdate(BaseModel):
+  title: Optional[str] = None
+  content_type: Optional[str] = None
+  content_url: Optional[str] = None
+  content_text: Optional[str] = None
+  order_in_lesson: Optional[int] = None
+
+
+class LessonContentRead(LessonContentBase):
+  id: int
+
+  class Config:
+    from_attributes = True
 
 
 class ClassSessionCreate(ClassSessionBase):

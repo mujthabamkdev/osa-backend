@@ -1,43 +1,158 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from datetime import datetime
+from typing import Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+
+from app.api.v1.deps import require_role
 from app.core.database import get_db
-from app.models.user import User
+from app.models.chapter import Chapter
 from app.models.course import Course
 from app.models.enrollment import Enrollment
-from app.models.chapter import Chapter
+from app.models.lesson_question import LessonQuestion
+from app.models.platform_setting import PlatformSetting
+from app.models.user import User
+from app.schemas.admin import AdminSettings, AdminSettingsUpdate
+
 
 router = APIRouter()
 
+
+DEFAULT_FEATURE_FLAGS: Dict[str, bool] = {
+    "allow_teacher_live_classes": True,
+    "allow_teacher_exam_creation": True,
+    "allow_teacher_manage_course_content": True,
+    "allow_teacher_view_student_progress": True,
+    "allow_parent_view_progress": True,
+    "allow_parent_message_teacher": True,
+    "allow_parent_download_reports": True,
+    "enable_course_catalog": True,
+    "enable_student_self_enrollment": True,
+}
+
+
+DEFAULT_ROLE_PERMISSIONS: Dict[str, Dict[str, bool]] = {
+    "teacher": {
+        "manage_courses": True,
+        "manage_course_content": True,
+        "conduct_live_classes": True,
+        "create_exams": True,
+        "grade_exams": True,
+        "respond_to_questions": True,
+        "view_student_progress": True,
+        "message_parents": True,
+    },
+    "parent": {
+        "view_child_progress": True,
+        "view_grades": True,
+        "download_reports": True,
+        "message_teacher": True,
+        "join_live_classes": False,
+    },
+}
+
+
+def _merge_dict(defaults: Dict, overrides: Optional[Dict]) -> Dict:
+    merged = {**defaults}
+    if not overrides:
+        return merged
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            nested_default = merged.get(key, {})
+            merged[key] = {**nested_default, **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _get_setting(db: Session, key: str, fallback: Dict) -> Dict:
+    setting = db.query(PlatformSetting).filter(PlatformSetting.key == key).first()
+    if not setting:
+        setting = PlatformSetting(key=key, value=fallback)
+        db.add(setting)
+        db.commit()
+        db.refresh(setting)
+    return _merge_dict(fallback, setting.value or {})
+
+
+def _save_setting(db: Session, key: str, value: Dict, description: Optional[str] = None) -> Dict:
+    setting = db.query(PlatformSetting).filter(PlatformSetting.key == key).first()
+    if setting:
+        setting.value = value
+        if description is not None:
+            setting.description = description
+    else:
+        setting = PlatformSetting(key=key, value=value, description=description)
+        db.add(setting)
+    db.commit()
+    db.refresh(setting)
+    return setting.value
+
+
 @router.get("/stats")
-def get_dashboard_stats(db: Session = Depends(get_db)):
+def get_dashboard_stats(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
     """Get dashboard statistics for admin"""
+
     total_users = db.query(User).count()
+    active_users = db.query(User).filter(User.is_active.is_(True)).count()
     students = db.query(User).filter(User.role == "student").count()
+    active_students = (
+        db.query(User).filter(User.role == "student", User.is_active.is_(True)).count()
+    )
     teachers = db.query(User).filter(User.role == "teacher").count()
+    active_teachers = (
+        db.query(User).filter(User.role == "teacher", User.is_active.is_(True)).count()
+    )
     parents = db.query(User).filter(User.role == "parent").count()
     admins = db.query(User).filter(User.role == "admin").count()
 
+    total_courses = db.query(Course).count()
+    total_enrollments = db.query(Enrollment).filter(Enrollment.is_active.is_(True)).count()
+    unanswered_questions = (
+        db.query(LessonQuestion)
+        .filter(LessonQuestion.answer.is_(None))
+        .count()
+    )
+
+    try:
+        db.query(User).limit(1).all()
+        system_health = "healthy"
+    except Exception:  # pragma: no cover - defensive
+        system_health = "degraded"
+
     return {
-        "totalUsers": total_users,
-        "students": students,
-        "teachers": teachers,
-        "parents": parents,
-        "admins": admins,
-        "totalCourses": 0,  # TODO: Implement course count
-        "activeCourses": 0,  # TODO: Implement active course count
-        "totalEnrollments": 0,  # TODO: Implement enrollment count
-        "systemHealth": "healthy"
+        "totals": {
+            "users": total_users,
+            "activeUsers": active_users,
+            "students": students,
+            "teachers": teachers,
+            "parents": parents,
+            "admins": admins,
+            "courses": total_courses,
+            "enrollments": total_enrollments,
+        },
+        "active": {
+            "students": active_students,
+            "teachers": active_teachers,
+        },
+        "unansweredQuestions": unanswered_questions,
+        "systemHealth": system_health,
+        "generatedAt": datetime.utcnow().isoformat() + "Z",
     }
 
+
 @router.get("/users")
-def get_users_by_role(role: Optional[str] = Query(None), db: Session = Depends(get_db)):
+def get_users_by_role(
+    role: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
     """Get users filtered by role"""
     query = db.query(User)
     if role:
         query = query.filter(User.role == role)
 
-    users = query.all()
+    users = query.order_by(User.created_at.desc()).all()
     return [
         {
             "id": user.id,
@@ -45,33 +160,40 @@ def get_users_by_role(role: Optional[str] = Query(None), db: Session = Depends(g
             "full_name": user.full_name,
             "role": user.role,
             "is_active": user.is_active,
-            "created_at": user.created_at
+            "created_at": user.created_at,
         }
         for user in users
     ]
 
+
 @router.get("/health")
-def get_system_health(db: Session = Depends(get_db)):
+def get_system_health(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
     """Get system health status"""
     try:
-        # Test database connection
         db.query(User).limit(1).all()
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "timestamp": "2025-10-15T00:00:00Z"  # TODO: Use actual timestamp
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e),
-            "timestamp": "2025-10-15T00:00:00Z"
-        }
+        db_status = "connected"
+        status_str = "healthy"
+        error = None
+    except Exception as exc:  # pragma: no cover - defensive
+        db_status = "unavailable"
+        status_str = "unhealthy"
+        error = str(exc)
+
+    return {
+        "status": status_str,
+        "database": db_status,
+        "error": error,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
 
 # Enrollment management endpoints
 @router.post("/enroll")
-def enroll_student(student_id: int, course_id: int, db: Session = Depends(get_db)):
+def enroll_student(
+    student_id: int,
+    course_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
     """Enroll a student in a course (Admin only)"""
     # Verify student exists and is a student
     student = db.query(User).filter(User.id == student_id, User.role == "student").first()
@@ -112,7 +234,11 @@ def enroll_student(student_id: int, course_id: int, db: Session = Depends(get_db
     }
 
 @router.delete("/enroll/{enrollment_id}")
-def unenroll_student(enrollment_id: int, db: Session = Depends(get_db)):
+def unenroll_student(
+    enrollment_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
     """Unenroll a student from a course (Admin only)"""
     enrollment = db.query(Enrollment).filter(Enrollment.id == enrollment_id).first()
     if not enrollment:
@@ -124,7 +250,10 @@ def unenroll_student(enrollment_id: int, db: Session = Depends(get_db)):
     return {"message": "Student unenrolled successfully"}
 
 @router.get("/enrollments")
-def get_enrollments(db: Session = Depends(get_db)):
+def get_enrollments(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
     """Get all enrollments (Admin only)"""
     enrollments = db.query(Enrollment).filter(Enrollment.is_active == True).all()
 
@@ -156,7 +285,8 @@ def get_enrollments(db: Session = Depends(get_db)):
 def update_student_active_class(
     enrollment_id: int,
     active_class_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
 ):
     """Update a student's active class (Admin only)"""
     # Verify enrollment exists
@@ -181,5 +311,50 @@ def update_student_active_class(
         "enrollment_id": enrollment_id,
         "student_id": enrollment.student_id,
         "active_class_id": active_class_id,
-        "active_class_title": chapter.title
+        "active_class_title": chapter.title,
     }
+
+
+@router.get("/settings", response_model=AdminSettings)
+def get_admin_settings(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    feature_flags = _get_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    role_permissions = _get_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    return AdminSettings(feature_flags=feature_flags, role_permissions=role_permissions)
+
+
+@router.put("/settings", response_model=AdminSettings)
+def update_admin_settings(
+    payload: AdminSettingsUpdate,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    current_flags = _get_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    current_permissions = _get_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+
+    if payload.feature_flags is not None:
+        current_flags = _merge_dict(current_flags, payload.feature_flags)
+    if payload.role_permissions is not None:
+        current_permissions = _merge_dict(current_permissions, payload.role_permissions)
+
+    saved_flags = _save_setting(db, "feature_flags", current_flags, "Platform feature toggles")
+    saved_permissions = _save_setting(
+        db,
+        "role_permissions",
+        current_permissions,
+        "Role permission matrix",
+    )
+
+    return AdminSettings(feature_flags=saved_flags, role_permissions=saved_permissions)
+
+
+@router.post("/settings/reset", response_model=AdminSettings, status_code=status.HTTP_200_OK)
+def reset_admin_settings(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    saved_flags = _save_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    saved_permissions = _save_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    return AdminSettings(feature_flags=saved_flags, role_permissions=saved_permissions)

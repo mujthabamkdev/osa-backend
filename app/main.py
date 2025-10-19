@@ -43,6 +43,7 @@ from app.models.exam import Exam
 from app.models.exam_result import ExamResult
 from app.models.lesson_question import LessonQuestion
 from app.models.lesson_answer import LessonAnswer
+from app.models.platform_setting import PlatformSetting
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
