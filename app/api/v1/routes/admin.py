@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.models.chapter import Chapter
 from app.models.course import Course
 from app.models.enrollment import Enrollment
+from app.models.lesson_answer import LessonAnswer
 from app.models.lesson_question import LessonQuestion
 from app.models.platform_setting import PlatformSetting
 from app.models.user import User
@@ -110,7 +111,8 @@ def get_dashboard_stats(db: Session = Depends(get_db), _=Depends(require_role("a
     total_enrollments = db.query(Enrollment).filter(Enrollment.is_active.is_(True)).count()
     unanswered_questions = (
         db.query(LessonQuestion)
-        .filter(LessonQuestion.answer.is_(None))
+        .outerjoin(LessonAnswer, LessonAnswer.question_id == LessonQuestion.id)
+        .filter(LessonAnswer.id.is_(None))
         .count()
     )
 

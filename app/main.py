@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import text
+
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api.v1.routes import auth, users, courses, parents, students, admin, school, subjects, lessons, class_sessions, teachers
@@ -45,8 +47,32 @@ from app.models.lesson_question import LessonQuestion
 from app.models.lesson_answer import LessonAnswer
 from app.models.platform_setting import PlatformSetting
 
-# Create all tables
+# Create all tables and ensure legacy SQLite databases gain new lesson ordering support
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_lessons_order_column() -> None:
+  """Backfill the lessons.order_in_subject column when older SQLite DBs are reused."""
+  if engine.url.get_backend_name() != "sqlite":
+    return
+
+  with engine.connect() as connection:
+    columns = {
+      row[1]
+      for row in connection.execute(text("PRAGMA table_info(lessons)"))
+    }
+    if "order_in_subject" in columns:
+      return
+
+    connection.execute(
+      text(
+        "ALTER TABLE lessons ADD COLUMN order_in_subject INTEGER NOT NULL DEFAULT 1"
+      )
+    )
+    connection.commit()
+
+
+_ensure_lessons_order_column()
 
 app = FastAPI(
   title="OSA Backend API",
@@ -67,9 +93,9 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(courses.router, prefix="/api/v1/courses", tags=["Courses"])
-app.include_router(subjects.router, prefix="/api/v1/courses", tags=["Subjects"])
-app.include_router(lessons.router, prefix="/api/v1/courses", tags=["Lessons"])
-app.include_router(class_sessions.router, prefix="/api/v1/courses", tags=["Class Sessions"])
+app.include_router(subjects.router, prefix="/api/v1", tags=["Subjects"])
+app.include_router(lessons.router, prefix="/api/v1", tags=["Lessons"])
+app.include_router(class_sessions.router, prefix="/api/v1", tags=["Class Sessions"])
 app.include_router(school.router, prefix="/api/v1/school", tags=["School"])
 app.include_router(parents.router, prefix="/api/v1/parents", tags=["Parents"])
 app.include_router(students.router, prefix="/api/v1/students", tags=["Students"])

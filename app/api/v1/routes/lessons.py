@@ -16,22 +16,30 @@ from app.models.lesson import Lesson
 from app.models.lesson_content import LessonContent
 from app.models.subject import Subject
 
-router = APIRouter(prefix="/subjects/{subject_id}/lessons", tags=["lessons"])
+router = APIRouter(
+  prefix="/courses/{course_id}/subjects/{subject_id}/lessons",
+  tags=["lessons"]
+)
 
 
 @router.get("/", response_model=List[LessonWithSessions])
 def list_subject_lessons(
+  course_id: int,
   subject_id: int,
   db: Session = Depends(get_db),
   _=Depends(get_current_user)
 ):
   """Get all lessons for a subject"""
-  subject = db.query(Subject).filter(Subject.id == subject_id).first()
+  subject = db.query(Subject).filter(
+    Subject.id == subject_id,
+    Subject.course_id == course_id
+  ).first()
   if not subject:
     raise HTTPException(status_code=404, detail="Subject not found")
 
   lessons = db.query(Lesson).filter(
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).order_by(Lesson.order_in_subject).all()
 
   return lessons
@@ -39,13 +47,17 @@ def list_subject_lessons(
 
 @router.post("/", response_model=LessonRead, status_code=201)
 def create_lesson(
+  course_id: int,
   subject_id: int,
   data: LessonCreate,
   db: Session = Depends(get_db),
   _=Depends(require_role("teacher", "admin"))
 ):
   """Create a new lesson for a subject"""
-  subject = db.query(Subject).filter(Subject.id == subject_id).first()
+  subject = db.query(Subject).filter(
+    Subject.id == subject_id,
+    Subject.course_id == course_id
+  ).first()
   if not subject:
     raise HTTPException(status_code=404, detail="Subject not found")
 
@@ -72,6 +84,7 @@ def create_lesson(
 
 @router.get("/{lesson_id}", response_model=LessonWithSessions)
 def get_lesson(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   db: Session = Depends(get_db),
@@ -80,7 +93,8 @@ def get_lesson(
   """Get lesson details with all class sessions"""
   lesson = db.query(Lesson).filter(
     Lesson.id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not lesson:
     raise HTTPException(status_code=404, detail="Lesson not found")
@@ -90,6 +104,7 @@ def get_lesson(
 
 @router.put("/{lesson_id}", response_model=LessonRead)
 def update_lesson(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   data: LessonUpdate,
@@ -99,7 +114,8 @@ def update_lesson(
   """Update lesson"""
   lesson = db.query(Lesson).filter(
     Lesson.id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not lesson:
     raise HTTPException(status_code=404, detail="Lesson not found")
@@ -119,6 +135,7 @@ def update_lesson(
 
 @router.delete("/{lesson_id}", status_code=204)
 def delete_lesson(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   db: Session = Depends(get_db),
@@ -127,7 +144,8 @@ def delete_lesson(
   """Delete lesson"""
   lesson = db.query(Lesson).filter(
     Lesson.id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not lesson:
     raise HTTPException(status_code=404, detail="Lesson not found")
@@ -138,6 +156,7 @@ def delete_lesson(
 
 @router.get("/{lesson_id}/contents", response_model=List[LessonContentRead])
 def list_lesson_contents(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   db: Session = Depends(get_db),
@@ -146,7 +165,8 @@ def list_lesson_contents(
   """List content items for a lesson"""
   lesson = db.query(Lesson).filter(
     Lesson.id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not lesson:
     raise HTTPException(status_code=404, detail="Lesson not found")
@@ -158,6 +178,7 @@ def list_lesson_contents(
 
 @router.post("/{lesson_id}/contents", response_model=LessonContentRead, status_code=201)
 def create_lesson_content(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   data: LessonContentCreate,
@@ -167,7 +188,8 @@ def create_lesson_content(
   """Create new content for a lesson"""
   lesson = db.query(Lesson).filter(
     Lesson.id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not lesson:
     raise HTTPException(status_code=404, detail="Lesson not found")
@@ -191,6 +213,7 @@ def create_lesson_content(
 
 @router.put("/{lesson_id}/contents/{content_id}", response_model=LessonContentRead)
 def update_lesson_content(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   content_id: int,
@@ -202,7 +225,8 @@ def update_lesson_content(
   content = db.query(LessonContent).join(Lesson).filter(
     LessonContent.id == content_id,
     LessonContent.lesson_id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not content:
     raise HTTPException(status_code=404, detail="Content not found")
@@ -225,6 +249,7 @@ def update_lesson_content(
 
 @router.delete("/{lesson_id}/contents/{content_id}", status_code=204)
 def delete_lesson_content(
+  course_id: int,
   subject_id: int,
   lesson_id: int,
   content_id: int,
@@ -235,7 +260,8 @@ def delete_lesson_content(
   content = db.query(LessonContent).join(Lesson).filter(
     LessonContent.id == content_id,
     LessonContent.lesson_id == lesson_id,
-    Lesson.subject_id == subject_id
+    Lesson.subject_id == subject_id,
+    Lesson.course_id == course_id
   ).first()
   if not content:
     raise HTTPException(status_code=404, detail="Content not found")
