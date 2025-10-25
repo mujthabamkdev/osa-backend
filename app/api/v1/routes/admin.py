@@ -11,9 +11,14 @@ from app.models.course import Course
 from app.models.enrollment import Enrollment
 from app.models.lesson_answer import LessonAnswer
 from app.models.lesson_question import LessonQuestion
-from app.models.platform_setting import PlatformSetting
 from app.models.user import User
 from app.schemas.admin import AdminSettings, AdminSettingsUpdate
+from app.services.settings_service import (
+    DEFAULT_SCHEDULE_CONFIG,
+    get_platform_setting,
+    merge_dict,
+    save_platform_setting,
+)
 
 
 router = APIRouter()
@@ -51,44 +56,6 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, Dict[str, bool]] = {
         "join_live_classes": False,
     },
 }
-
-
-def _merge_dict(defaults: Dict, overrides: Optional[Dict]) -> Dict:
-    merged = {**defaults}
-    if not overrides:
-        return merged
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            nested_default = merged.get(key, {})
-            merged[key] = {**nested_default, **value}
-        else:
-            merged[key] = value
-    return merged
-
-
-def _get_setting(db: Session, key: str, fallback: Dict) -> Dict:
-    setting = db.query(PlatformSetting).filter(PlatformSetting.key == key).first()
-    if not setting:
-        setting = PlatformSetting(key=key, value=fallback)
-        db.add(setting)
-        db.commit()
-        db.refresh(setting)
-    return _merge_dict(fallback, setting.value or {})
-
-
-def _save_setting(db: Session, key: str, value: Dict, description: Optional[str] = None) -> Dict:
-    setting = db.query(PlatformSetting).filter(PlatformSetting.key == key).first()
-    if setting:
-        setting.value = value
-        if description is not None:
-            setting.description = description
-    else:
-        setting = PlatformSetting(key=key, value=value, description=description)
-        db.add(setting)
-    db.commit()
-    db.refresh(setting)
-    return setting.value
-
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
@@ -322,9 +289,14 @@ def get_admin_settings(
     db: Session = Depends(get_db),
     _=Depends(require_role("admin")),
 ):
-    feature_flags = _get_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
-    role_permissions = _get_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
-    return AdminSettings(feature_flags=feature_flags, role_permissions=role_permissions)
+    feature_flags = get_platform_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    role_permissions = get_platform_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    schedule_config = get_platform_setting(db, "schedule_config", DEFAULT_SCHEDULE_CONFIG)
+    return AdminSettings(
+        feature_flags=feature_flags,
+        role_permissions=role_permissions,
+        schedule_config=schedule_config,
+    )
 
 
 @router.put("/settings", response_model=AdminSettings)
@@ -333,23 +305,36 @@ def update_admin_settings(
     db: Session = Depends(get_db),
     _=Depends(require_role("admin")),
 ):
-    current_flags = _get_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
-    current_permissions = _get_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    current_flags = get_platform_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    current_permissions = get_platform_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    current_schedule = get_platform_setting(db, "schedule_config", DEFAULT_SCHEDULE_CONFIG)
 
     if payload.feature_flags is not None:
-        current_flags = _merge_dict(current_flags, payload.feature_flags)
+        current_flags = merge_dict(current_flags, payload.feature_flags)
     if payload.role_permissions is not None:
-        current_permissions = _merge_dict(current_permissions, payload.role_permissions)
+        current_permissions = merge_dict(current_permissions, payload.role_permissions)
+    if payload.schedule_config is not None:
+        current_schedule = merge_dict(current_schedule, payload.schedule_config)
 
-    saved_flags = _save_setting(db, "feature_flags", current_flags, "Platform feature toggles")
-    saved_permissions = _save_setting(
+    saved_flags = save_platform_setting(db, "feature_flags", current_flags, "Platform feature toggles")
+    saved_permissions = save_platform_setting(
         db,
         "role_permissions",
         current_permissions,
         "Role permission matrix",
     )
+    saved_schedule = save_platform_setting(
+        db,
+        "schedule_config",
+        current_schedule,
+        "Class scheduling configuration",
+    )
 
-    return AdminSettings(feature_flags=saved_flags, role_permissions=saved_permissions)
+    return AdminSettings(
+        feature_flags=saved_flags,
+        role_permissions=saved_permissions,
+        schedule_config=saved_schedule,
+    )
 
 
 @router.post("/settings/reset", response_model=AdminSettings, status_code=status.HTTP_200_OK)
@@ -357,6 +342,11 @@ def reset_admin_settings(
     db: Session = Depends(get_db),
     _=Depends(require_role("admin")),
 ):
-    saved_flags = _save_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
-    saved_permissions = _save_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
-    return AdminSettings(feature_flags=saved_flags, role_permissions=saved_permissions)
+    saved_flags = save_platform_setting(db, "feature_flags", DEFAULT_FEATURE_FLAGS)
+    saved_permissions = save_platform_setting(db, "role_permissions", DEFAULT_ROLE_PERMISSIONS)
+    saved_schedule = save_platform_setting(db, "schedule_config", DEFAULT_SCHEDULE_CONFIG)
+    return AdminSettings(
+        feature_flags=saved_flags,
+        role_permissions=saved_permissions,
+        schedule_config=saved_schedule,
+    )

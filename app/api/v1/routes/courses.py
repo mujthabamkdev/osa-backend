@@ -12,6 +12,7 @@ from app.models.live_class import LiveClass
 from app.models.enrollment import Enrollment
 from app.models.class_model import Class
 from app.services.courses import create_course
+from app.services.settings_service import DEFAULT_SCHEDULE_CONFIG, get_platform_setting
 import json
 from datetime import datetime
 
@@ -142,6 +143,8 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
         } for lc in live_classes
     ]
 
+    schedule_config = get_platform_setting(db, "schedule_config", DEFAULT_SCHEDULE_CONFIG)
+
     return {
         "id": course.id,
         "title": course.title,
@@ -152,5 +155,6 @@ def get_course_details(course_id: int, db: Session = Depends(get_db), current_us
         "created_at": course.created_at.isoformat() if course.created_at else None,
         "classes": classes_data,
         "subjects": subjects_data,
-        "live_classes": live_classes_data
+        "live_classes": live_classes_data,
+        "schedule_config": schedule_config,
     }
