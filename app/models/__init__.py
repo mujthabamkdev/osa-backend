@@ -17,6 +17,8 @@ from .exam import Exam
 from .exam_result import ExamResult
 from .lesson_question import LessonQuestion
 from .lesson_answer import LessonAnswer
+from .platform_setting import PlatformSetting
+from .parent_student import ParentStudent
 
 # Configure deferred relationships after all models are imported
 # Temporarily disabled to avoid mapper initialization issues
@@ -57,4 +59,6 @@ __all__ = [
   "ExamResult",
   "LessonQuestion",
   "LessonAnswer",
+  "PlatformSetting",
+  "ParentStudent",
 ]

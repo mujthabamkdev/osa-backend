@@ -1,5 +1,7 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, Date, ForeignKey, DateTime
+
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+
 from app.models.base import Base
 
 
@@ -19,8 +21,8 @@ class Lesson(Base):
   subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False, index=True)
   title = Column(String(255), nullable=False)
   description = Column(Text, nullable=True)
-  scheduled_date = Column(Date, nullable=False)
-  order_in_course = Column(Integer, nullable=False, default=1)
+  scheduled_date = Column(Date, nullable=True)
+  order_in_subject = Column(Integer, nullable=False, default=1)
   created_at = Column(DateTime, default=datetime.utcnow)
 
   # Relationships will be configured after all models are imported

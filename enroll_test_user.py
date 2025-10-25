@@ -12,13 +12,6 @@ def enroll_test_user():
     db = SessionLocal()
 
     try:
-        # First, add the missing active_class_id column if it doesn't exist
-        try:
-            db.execute(text("ALTER TABLE enrollments ADD COLUMN active_class_id INTEGER REFERENCES chapters(id)"))
-            print("Added active_class_id column to enrollments table")
-        except Exception as e:
-            print(f"Column might already exist: {e}")
-
         # Get test user
         result = db.execute(text("SELECT id FROM users WHERE email = 'test@test.com'"))
         user_row = result.fetchone()
@@ -38,26 +31,26 @@ def enroll_test_user():
         else:
             # Enroll the user
             db.execute(text("""
-                INSERT INTO enrollments (student_id, course_id, active_class_id, enrolled_at, is_active)
-                VALUES (:student_id, :course_id, :active_class_id, :enrolled_at, :is_active)
+                INSERT INTO enrollments (student_id, course_id, class_id, enrolled_at, is_active)
+                VALUES (:student_id, :course_id, :class_id, :enrolled_at, :is_active)
             """), {
                 "student_id": user_id,
                 "course_id": 1,
-                "active_class_id": 7,  # Class One - Swarf
+                "class_id": 1,
                 "enrolled_at": datetime.utcnow(),
                 "is_active": True
             })
 
             print("Successfully enrolled test user in course 1")
-            print("Set active class to 'Class One - Swarf' (ID: 7)")
+            print("Set class to ID 1")
 
-        # Set active class for the enrollment (first subject)
+        # Update class for the enrollment if needed
         db.execute(text("""
             UPDATE enrollments
-            SET active_class_id = :active_class_id
+            SET class_id = :class_id
             WHERE student_id = :student_id AND course_id = :course_id
         """), {
-            "active_class_id": 7,  # Class One - Swarf
+            "class_id": 1,
             "student_id": user_id,
             "course_id": 1
         })
@@ -66,9 +59,9 @@ def enroll_test_user():
 
         # Verify enrollment
         result = db.execute(text("""
-            SELECT e.id, e.student_id, e.course_id, e.active_class_id, c.title as active_class_title
+            SELECT e.id, e.student_id, e.course_id, e.class_id, c.name as class_name
             FROM enrollments e
-            LEFT JOIN chapters c ON e.active_class_id = c.id
+            LEFT JOIN classes c ON e.class_id = c.id
             WHERE e.student_id = :student_id
         """), {"student_id": user_id})
 
@@ -78,8 +71,8 @@ def enroll_test_user():
             print(f"Enrollment ID: {enrollment[0]}")
             print(f"Student ID: {enrollment[1]}")
             print(f"Course ID: {enrollment[2]}")
-            print(f"Active Class ID: {enrollment[3]}")
-            print(f"Active Class Title: {enrollment[4]}")
+            print(f"Class ID: {enrollment[3]}")
+            print(f"Class Name: {enrollment[4]}")
 
     except Exception as e:
         print(f"Error: {e}")

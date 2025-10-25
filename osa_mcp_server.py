@@ -75,17 +75,17 @@ class OSAMCPTools:
         except httpx.HTTPError as e:
             return {"error": f"Failed to enroll student: {str(e)}"}
 
-    async def update_student_active_class(self, enrollment_id: int, active_class_id: int) -> Dict[str, Any]:
-        """Update a student's active class (admin only)"""
+    async def update_student_class(self, enrollment_id: int, class_id: int) -> Dict[str, Any]:
+        """Update a student's class assignment for an enrollment (admin only)"""
         try:
             response = await self.client.put(
-                f"/api/v1/admin/enrollments/{enrollment_id}/active-class",
-                json={"active_class_id": active_class_id}
+                f"/api/v1/admin/enrollments/{enrollment_id}/class",
+                json={"class_id": class_id}
             )
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError as e:
-            return {"error": f"Failed to update active class: {str(e)}"}
+            return {"error": f"Failed to update class assignment: {str(e)}"}
 
     async def get_student_notes(self, student_id: int) -> List[Dict[str, Any]]:
         """Get notes for a specific student"""
@@ -173,8 +173,8 @@ async def list_tools() -> List[Tool]:
             }
         ),
         Tool(
-            name="update_student_active_class",
-            description="Update a student's active class for progression tracking (requires admin privileges)",
+            name="update_student_class",
+            description="Update the class linked to a student's enrollment (requires admin privileges)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -182,12 +182,12 @@ async def list_tools() -> List[Tool]:
                         "type": "integer",
                         "description": "The ID of the enrollment to update"
                     },
-                    "active_class_id": {
+                    "class_id": {
                         "type": "integer",
-                        "description": "The ID of the chapter to set as active"
+                        "description": "The ID of the class to assign"
                     }
                 },
-                "required": ["enrollment_id", "active_class_id"]
+                "required": ["enrollment_id", "class_id"]
             }
         ),
         Tool(
@@ -251,13 +251,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
                 text=f"Enrolled Student {student_id} in Course {course_id}:\n{result}"
             )]
 
-        elif name == "update_student_active_class":
+        elif name == "update_student_class":
             enrollment_id = arguments["enrollment_id"]
-            active_class_id = arguments["active_class_id"]
-            result = await osa_tools.update_student_active_class(enrollment_id, active_class_id)
+            class_id = arguments["class_id"]
+            result = await osa_tools.update_student_class(enrollment_id, class_id)
             return [TextContent(
                 type="text",
-                text=f"Updated Active Class for Enrollment {enrollment_id} to Class {active_class_id}:\n{result}"
+                text=f"Updated class for Enrollment {enrollment_id} to {class_id}:\n{result}"
             )]
 
         elif name == "get_student_notes":
