@@ -293,17 +293,21 @@ def get_users_by_role(
         query = query.filter(User.role == role)
 
     users = query.order_by(User.created_at.desc()).all()
-    return [
-        {
-            "id": user.id,
-            "email": user.email,
-            "full_name": user.full_name,
-            "role": user.role,
-            "is_active": user.is_active,
-            "created_at": user.created_at,
-        }
-        for user in users
-    ]
+    
+    if role == "student":
+        return [_serialize_student(db, user) for user in users]
+    else:
+        return [
+            {
+                "id": user.id,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role,
+                "is_active": user.is_active,
+                "created_at": user.created_at,
+            }
+            for user in users
+        ]
 
 
 @router.get("/pending-users", response_model=List[PendingUserResponse])
