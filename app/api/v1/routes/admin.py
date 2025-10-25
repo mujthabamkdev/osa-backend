@@ -1,16 +1,18 @@
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import require_role
 from app.core.database import get_db
-from app.models.chapter import Chapter
+from app.models.class_model import Class
 from app.models.course import Course
 from app.models.enrollment import Enrollment
 from app.models.lesson_answer import LessonAnswer
 from app.models.lesson_question import LessonQuestion
+from app.models.parent_student import ParentStudent
 from app.models.user import User
 from app.schemas.admin import AdminSettings, AdminSettingsUpdate
 from app.services.settings_service import (
@@ -56,6 +58,122 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, Dict[str, bool]] = {
         "join_live_classes": False,
     },
 }
+
+
+class PendingUserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    role: str
+    created_at: datetime
+
+
+class CourseAssignmentPayload(BaseModel):
+    course_id: int
+    class_id: Optional[int] = Field(default=None, description="Optional class for the course")
+
+
+class ApproveUserPayload(BaseModel):
+    course_assignments: List[CourseAssignmentPayload] = Field(default_factory=list)
+    child_ids: List[int] = Field(default_factory=list)
+    activate: bool = True
+
+
+class EnrollmentSummary(BaseModel):
+    id: int
+    course_id: int
+    course_title: str
+    class_id: Optional[int] = None
+    class_name: Optional[str] = None
+    enrolled_at: datetime
+
+
+class StudentAdminResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    created_at: datetime
+    enrollments: List[EnrollmentSummary] = Field(default_factory=list)
+
+
+class ParentChildSummary(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+
+
+class ParentAdminResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    created_at: datetime
+    children: List[ParentChildSummary] = Field(default_factory=list)
+
+
+def _serialize_enrollment(db: Session, enrollment: Enrollment) -> EnrollmentSummary:
+    course = db.query(Course).filter(Course.id == enrollment.course_id).first()
+    class_obj = None
+    if enrollment.class_id:
+        class_obj = (
+            db.query(Class)
+            .filter(Class.id == enrollment.class_id)
+            .first()
+        )
+
+    return EnrollmentSummary(
+        id=enrollment.id,
+        course_id=enrollment.course_id,
+        course_title=course.title if course else "Unknown Course",
+        class_id=class_obj.id if class_obj else None,
+        class_name=class_obj.name if class_obj else None,
+        enrolled_at=enrollment.enrolled_at,
+    )
+
+
+def _serialize_student(db: Session, student: User) -> StudentAdminResponse:
+    enrollments = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == student.id, Enrollment.is_active.is_(True))
+        .order_by(Enrollment.enrolled_at.desc())
+        .all()
+    )
+    summaries = [_serialize_enrollment(db, enrollment) for enrollment in enrollments]
+    return StudentAdminResponse(
+        id=student.id,
+        email=student.email,
+        full_name=student.full_name,
+        created_at=student.created_at,
+        enrollments=summaries,
+    )
+
+
+def _serialize_parent(db: Session, parent: User) -> ParentAdminResponse:
+    links = (
+        db.query(ParentStudent)
+        .filter(ParentStudent.parent_id == parent.id)
+        .all()
+    )
+    child_ids = [link.student_id for link in links]
+    children = []
+    if child_ids:
+        child_records = (
+            db.query(User)
+            .filter(User.id.in_(child_ids))
+            .order_by(User.full_name.asc())
+            .all()
+        )
+        children = [
+            ParentChildSummary(id=child.id, email=child.email, full_name=child.full_name)
+            for child in child_records
+        ]
+
+    return ParentAdminResponse(
+        id=parent.id,
+        email=parent.email,
+        full_name=parent.full_name,
+        created_at=parent.created_at,
+        children=children,
+    )
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
@@ -135,6 +253,267 @@ def get_users_by_role(
     ]
 
 
+@router.get("/pending-users", response_model=List[PendingUserResponse])
+def get_pending_users(
+    role: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    """Return all users awaiting admin approval."""
+
+    query = db.query(User).filter(User.is_active.is_(False))
+    if role:
+        query = query.filter(User.role == role)
+
+    pending_users = query.order_by(User.created_at.asc()).all()
+    return [
+        PendingUserResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            created_at=user.created_at,
+        )
+        for user in pending_users
+    ]
+
+
+@router.post("/users/{user_id}/approve", response_model=StudentAdminResponse | ParentAdminResponse)
+def approve_user(
+    user_id: int,
+    payload: ApproveUserPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    """Activate an account and optionally assign courses/classes or children."""
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.is_active and payload.activate:
+        raise HTTPException(status_code=400, detail="User is already active")
+
+    user.is_active = payload.activate
+
+    if user.role == "student":
+        for assignment in payload.course_assignments:
+            course = db.query(Course).filter(Course.id == assignment.course_id).first()
+            if not course:
+                raise HTTPException(status_code=404, detail=f"Course {assignment.course_id} not found")
+
+            class_obj = None
+            if assignment.class_id is not None:
+                class_obj = (
+                    db.query(Class)
+                    .filter(Class.id == assignment.class_id, Class.course_id == course.id)
+                    .first()
+                )
+                if not class_obj:
+                    raise HTTPException(status_code=404, detail="Class does not belong to the selected course")
+
+            enrollment = (
+                db.query(Enrollment)
+                .filter(
+                    Enrollment.student_id == user.id,
+                    Enrollment.course_id == course.id,
+                    Enrollment.is_active.is_(True),
+                )
+                .first()
+            )
+
+            if enrollment:
+                if assignment.class_id is not None:
+                    enrollment.class_id = assignment.class_id
+            else:
+                db.add(
+                    Enrollment(
+                        student_id=user.id,
+                        course_id=course.id,
+                        class_id=assignment.class_id,
+                        is_active=True,
+                    )
+                )
+
+    if user.role == "parent":
+        for child_id in payload.child_ids:
+            child = (
+                db.query(User)
+                .filter(User.id == child_id, User.role == "student")
+                .first()
+            )
+            if not child:
+                raise HTTPException(status_code=404, detail=f"Student {child_id} not found")
+
+            existing_link = (
+                db.query(ParentStudent)
+                .filter(
+                    ParentStudent.parent_id == user.id,
+                    ParentStudent.student_id == child.id,
+                )
+                .first()
+            )
+            if not existing_link:
+                db.add(ParentStudent(parent_id=user.id, student_id=child.id))
+
+    db.commit()
+    db.refresh(user)
+
+    if user.role == "student":
+        return _serialize_student(db, user)
+    if user.role == "parent":
+        return _serialize_parent(db, user)
+
+    return StudentAdminResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        created_at=user.created_at,
+        enrollments=[],
+    )
+
+
+@router.get("/students", response_model=List[StudentAdminResponse])
+def list_students(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    students = (
+        db.query(User)
+        .filter(User.role == "student", User.is_active.is_(True))
+        .order_by(User.full_name.asc(), User.created_at.asc())
+        .all()
+    )
+    return [_serialize_student(db, student) for student in students]
+
+
+class UpdateEnrollmentsPayload(BaseModel):
+    course_assignments: List[CourseAssignmentPayload] = Field(default_factory=list)
+
+
+@router.put("/students/{student_id}/enrollments", response_model=StudentAdminResponse)
+def update_student_enrollments(
+    student_id: int,
+    payload: UpdateEnrollmentsPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    student = (
+        db.query(User)
+        .filter(User.id == student_id, User.role == "student")
+        .first()
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    existing = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == student.id, Enrollment.is_active.is_(True))
+        .all()
+    )
+    existing_map = {enrollment.course_id: enrollment for enrollment in existing}
+
+    incoming_course_ids = {assignment.course_id for assignment in payload.course_assignments}
+
+    # Deactivate enrollments not in payload
+    for enrollment in existing:
+        if enrollment.course_id not in incoming_course_ids:
+            enrollment.is_active = False
+
+    for assignment in payload.course_assignments:
+        course = db.query(Course).filter(Course.id == assignment.course_id).first()
+        if not course:
+            raise HTTPException(status_code=404, detail=f"Course {assignment.course_id} not found")
+
+        class_obj = None
+        if assignment.class_id is not None:
+            class_obj = (
+                db.query(Class)
+                .filter(Class.id == assignment.class_id, Class.course_id == course.id)
+                .first()
+            )
+            if not class_obj:
+                raise HTTPException(status_code=404, detail="Class does not belong to the selected course")
+
+        enrollment = existing_map.get(course.id)
+        if enrollment:
+            enrollment.is_active = True
+            enrollment.class_id = assignment.class_id
+        else:
+            db.add(
+                Enrollment(
+                    student_id=student.id,
+                    course_id=course.id,
+                    class_id=assignment.class_id,
+                    is_active=True,
+                )
+            )
+
+    db.commit()
+    return _serialize_student(db, student)
+
+
+class UpdateParentChildrenPayload(BaseModel):
+    child_ids: List[int] = Field(default_factory=list)
+
+
+@router.get("/parents", response_model=List[ParentAdminResponse])
+def list_parents(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    parents = (
+        db.query(User)
+        .filter(User.role == "parent", User.is_active.is_(True))
+        .order_by(User.full_name.asc(), User.created_at.asc())
+        .all()
+    )
+    return [_serialize_parent(db, parent) for parent in parents]
+
+
+@router.put("/parents/{parent_id}/children", response_model=ParentAdminResponse)
+def update_parent_children(
+    parent_id: int,
+    payload: UpdateParentChildrenPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    parent = (
+        db.query(User)
+        .filter(User.id == parent_id, User.role == "parent")
+        .first()
+    )
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent not found")
+
+    desired_ids = set(payload.child_ids)
+
+    # Remove links no longer present
+    existing_links = (
+        db.query(ParentStudent)
+        .filter(ParentStudent.parent_id == parent.id)
+        .all()
+    )
+    for link in existing_links:
+        if link.student_id not in desired_ids:
+            db.delete(link)
+
+    # Add missing links
+    current_student_ids = {link.student_id for link in existing_links}
+    for child_id in desired_ids:
+        if child_id in current_student_ids:
+            continue
+        child = (
+            db.query(User)
+            .filter(User.id == child_id, User.role == "student")
+            .first()
+        )
+        if not child:
+            raise HTTPException(status_code=404, detail=f"Student {child_id} not found")
+        db.add(ParentStudent(parent_id=parent.id, student_id=child.id))
+
+    db.commit()
+    return _serialize_parent(db, parent)
 @router.get("/health")
 def get_system_health(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
     """Get system health status"""
@@ -160,10 +539,14 @@ def get_system_health(db: Session = Depends(get_db), _=Depends(require_role("adm
 def enroll_student(
     student_id: int,
     course_id: int,
+    class_id: Optional[int] = None,
     db: Session = Depends(get_db),
     _=Depends(require_role("admin")),
 ):
-    """Enroll a student in a course (Admin only)"""
+    """Enroll a student in a course (Admin only).
+
+    Deprecated in favor of /students/{id}/enrollments but kept for compatibility.
+    """
     # Verify student exists and is a student
     student = db.query(User).filter(User.id == student_id, User.role == "student").first()
     if not student:
@@ -182,14 +565,43 @@ def enroll_student(
     ).first()
 
     if existing_enrollment:
-        raise HTTPException(status_code=400, detail="Student is already enrolled in this course")
+        if class_id is not None:
+            class_obj = (
+                db.query(Class)
+                .filter(Class.id == class_id, Class.course_id == course.id)
+                .first()
+            )
+            if not class_obj:
+                raise HTTPException(status_code=404, detail="Class does not belong to selected course")
+            existing_enrollment.class_id = class_id
+            db.commit()
+            db.refresh(existing_enrollment)
+        else:
+            raise HTTPException(status_code=400, detail="Student is already enrolled in this course")
+
+        return {
+            "message": "Enrollment updated",
+            "enrollment_id": existing_enrollment.id,
+            "student_id": student_id,
+            "course_id": course_id,
+            "class_id": existing_enrollment.class_id,
+        }
+
+    if class_id is not None:
+        class_obj = (
+            db.query(Class)
+            .filter(Class.id == class_id, Class.course_id == course.id)
+            .first()
+        )
+        if not class_obj:
+            raise HTTPException(status_code=404, detail="Class does not belong to selected course")
 
     # Create enrollment
     enrollment = Enrollment(
         student_id=student_id,
         course_id=course_id,
+        class_id=class_id,
         is_active=True,
-        active_class_id=1  # Start with Class 1 for Online Sharia course
     )
     db.add(enrollment)
     db.commit()
@@ -199,7 +611,8 @@ def enroll_student(
         "message": "Student enrolled successfully",
         "enrollment_id": enrollment.id,
         "student_id": student_id,
-        "course_id": course_id
+        "course_id": course_id,
+        "class_id": enrollment.class_id,
     }
 
 @router.delete("/enroll/{enrollment_id}")
@@ -250,10 +663,10 @@ def get_enrollments(
 
 
 # Active class management endpoints
-@router.put("/enrollments/{enrollment_id}/active-class")
-def update_student_active_class(
+@router.put("/enrollments/{enrollment_id}/class")
+def update_student_class(
     enrollment_id: int,
-    active_class_id: int,
+    class_id: int,
     db: Session = Depends(get_db),
     _=Depends(require_role("admin")),
 ):
@@ -263,24 +676,24 @@ def update_student_active_class(
     if not enrollment:
         raise HTTPException(status_code=404, detail="Enrollment not found")
 
-    # Verify the chapter exists and belongs to the enrolled course
-    chapter = db.query(Chapter).filter(
-        Chapter.id == active_class_id,
-        Chapter.course_id == enrollment.course_id
-    ).first()
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found in this course")
+    class_obj = (
+        db.query(Class)
+        .filter(Class.id == class_id, Class.course_id == enrollment.course_id)
+        .first()
+    )
+    if not class_obj:
+        raise HTTPException(status_code=404, detail="Class not found in this course")
 
     # Update the active class
-    enrollment.active_class_id = active_class_id
+    enrollment.class_id = class_id
     db.commit()
 
     return {
         "message": "Student's active class updated successfully",
         "enrollment_id": enrollment_id,
         "student_id": enrollment.student_id,
-        "active_class_id": active_class_id,
-        "active_class_title": chapter.title,
+        "class_id": class_id,
+        "class_name": class_obj.name,
     }
 
 

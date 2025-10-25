@@ -309,13 +309,14 @@ def get_course_details(course_id: int, current_user: User = Depends(get_current_
             Enrollment.course_id == course_id,
             Enrollment.is_active == True
         ).first()
-        if enrollment and enrollment.active_class_id:
-            active_chapter = db.query(Chapter).filter(Chapter.id == enrollment.active_class_id).first()
-            if active_chapter:
+        if enrollment and enrollment.class_id:
+            class_record = db.query(Class).filter(Class.id == enrollment.class_id).first()
+            if class_record:
                 active_class = {
-                    "id": active_chapter.id,
-                    "title": active_chapter.title,
-                    "description": active_chapter.description
+                    "id": class_record.id,
+                    "name": class_record.name,
+                    "year": class_record.year,
+                    "is_active": class_record.is_active
                 }
 
     chapters_data = []

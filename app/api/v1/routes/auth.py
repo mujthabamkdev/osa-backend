@@ -20,7 +20,7 @@ class LoginDTO(BaseModel):
 class RegisterDTO(BaseModel):
     email: EmailStr
     password: str
-    fullName: str
+    full_name: str
     role: Optional[str] = "student"
 
 
@@ -31,14 +31,25 @@ def login(dto: LoginDTO, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid credentials")
 
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Account pending admin approval")
+
     token = create_access_token({"sub": user.email,
                                  "id": user.id,
                                  "role": user.role})
 
-    return {"access_token": token,
-            "token_type": "bearer",
-            "user": {"id": user.id, "email": user.email,
-                     "fullName": user.full_name, "role": user.role}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_active": user.is_active,
+        },
+    }
 
 
 @router.post("/register", status_code=201)
@@ -50,18 +61,29 @@ async def register(request: Request, db: Session = Depends(get_db)):
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
                             content={"detail": "Email already registered"})
 
+    is_active = dto.role == "admin"
     new_user = User(email=dto.email,
                     hashed_password=get_password_hash(dto.password),
-                    full_name=dto.fullName,
-                    role=dto.role)
+                    full_name=dto.full_name,
+                    role=dto.role,
+                    is_active=is_active)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    token = create_access_token({"sub": new_user.email,
-                                 "id": new_user.id,
-                                 "role": new_user.role})
+    if is_active:
+        token = create_access_token({"sub": new_user.email,
+                                     "id": new_user.id,
+                                     "role": new_user.role})
+        return {"token": token,
+                "user": {"id": new_user.id, "email": new_user.email,
+                          "full_name": new_user.full_name, "role": new_user.role,
+                          "is_active": new_user.is_active}}
 
-    return {"token": token,
-            "user": {"id": new_user.id, "email": new_user.email,
-                     "fullName": new_user.full_name, "role": new_user.role}}
+    return {
+        "message": "Registration submitted. An administrator must approve the account before first login.",
+        "user_id": new_user.id,
+        "email": new_user.email,
+        "role": new_user.role,
+        "is_active": new_user.is_active,
+    }
