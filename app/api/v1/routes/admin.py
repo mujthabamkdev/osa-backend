@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import require_role
@@ -10,9 +11,12 @@ from app.core.database import get_db
 from app.models.class_model import Class
 from app.models.course import Course
 from app.models.enrollment import Enrollment
+from app.models.exam import Exam
+from app.models.live_class import LiveClass
 from app.models.lesson_answer import LessonAnswer
 from app.models.lesson_question import LessonQuestion
 from app.models.parent_student import ParentStudent
+from app.models.subject import Subject
 from app.models.user import User
 from app.schemas.admin import AdminSettings, AdminSettingsUpdate
 from app.services.settings_service import (
@@ -110,6 +114,44 @@ class ParentAdminResponse(BaseModel):
     children: List[ParentChildSummary] = Field(default_factory=list)
 
 
+class TeacherCourseSummary(BaseModel):
+    id: int
+    title: str
+
+
+class TeacherSubjectSummary(BaseModel):
+    id: int
+    name: str
+    course_id: int
+    course_title: str
+
+
+class TeacherAssignmentOverview(BaseModel):
+    teacher_id: int
+    teacher_email: str
+    teacher_name: Optional[str] = None
+    course_count: int
+    subject_count: int
+    live_class_count: int
+    exam_count: int
+    lesson_answer_count: int
+    courses: List[TeacherCourseSummary] = Field(default_factory=list)
+    subjects: List[TeacherSubjectSummary] = Field(default_factory=list)
+
+
+class TeacherReassignmentPayload(BaseModel):
+    replacement_teacher_id: int
+
+
+class TeacherReassignmentResult(BaseModel):
+    deleted_teacher_id: int
+    reassigned_courses: int
+    reassigned_subjects: int
+    reassigned_live_classes: int
+    reassigned_exams: int
+    reassigned_lesson_answers: int
+
+
 def _serialize_enrollment(db: Session, enrollment: Enrollment) -> EnrollmentSummary:
     course = db.query(Course).filter(Course.id == enrollment.course_id).first()
     class_obj = None
@@ -174,6 +216,17 @@ def _serialize_parent(db: Session, parent: User) -> ParentAdminResponse:
         created_at=parent.created_at,
         children=children,
     )
+
+
+def _ensure_teacher_exists(db: Session, teacher_id: int) -> User:
+    teacher = (
+        db.query(User)
+        .filter(User.id == teacher_id)
+        .first()
+    )
+    if not teacher or teacher.role != "teacher":
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    return teacher
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
@@ -514,6 +567,131 @@ def update_parent_children(
 
     db.commit()
     return _serialize_parent(db, parent)
+
+
+@router.get("/teachers/{teacher_id}/assignments", response_model=TeacherAssignmentOverview)
+def get_teacher_assignments(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    teacher = _ensure_teacher_exists(db, teacher_id)
+
+    courses = (
+        db.query(Course)
+        .filter(Course.teacher_id == teacher.id)
+        .order_by(Course.title.asc())
+        .all()
+    )
+
+    subjects = (
+        db.query(Subject, Course)
+        .join(Course, Course.id == Subject.course_id)
+        .filter(Subject.instructor_id == teacher.id)
+        .order_by(Course.title.asc(), Subject.order_in_course.asc())
+        .all()
+    )
+
+    live_class_count = (
+        db.query(func.count(LiveClass.id))
+        .filter(LiveClass.teacher_id == teacher.id)
+        .scalar()
+        or 0
+    )
+    exam_count = (
+        db.query(func.count(Exam.id))
+        .filter(Exam.teacher_id == teacher.id)
+        .scalar()
+        or 0
+    )
+    lesson_answer_count = (
+        db.query(func.count(LessonAnswer.id))
+        .filter(LessonAnswer.teacher_id == teacher.id)
+        .scalar()
+        or 0
+    )
+
+    return TeacherAssignmentOverview(
+        teacher_id=teacher.id,
+        teacher_email=teacher.email,
+        teacher_name=teacher.full_name,
+        course_count=len(courses),
+        subject_count=len(subjects),
+        live_class_count=live_class_count,
+        exam_count=exam_count,
+        lesson_answer_count=lesson_answer_count,
+        courses=[
+            TeacherCourseSummary(id=course.id, title=course.title)
+            for course in courses
+        ],
+        subjects=[
+            TeacherSubjectSummary(
+                id=subject.id,
+                name=subject.name,
+                course_id=course.id,
+                course_title=course.title,
+            )
+            for subject, course in subjects
+        ],
+    )
+
+
+@router.post("/teachers/{teacher_id}/reassign", response_model=TeacherReassignmentResult)
+def reassign_teacher_and_delete(
+    teacher_id: int,
+    payload: TeacherReassignmentPayload,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("admin")),
+):
+    teacher = _ensure_teacher_exists(db, teacher_id)
+
+    if teacher_id == payload.replacement_teacher_id:
+        raise HTTPException(status_code=400, detail="Replacement teacher must be different")
+
+    replacement = _ensure_teacher_exists(db, payload.replacement_teacher_id)
+
+    if not replacement.is_active:
+        raise HTTPException(status_code=400, detail="Replacement teacher must be active")
+
+    courses_updated = (
+        db.query(Course)
+        .filter(Course.teacher_id == teacher.id)
+        .update({Course.teacher_id: replacement.id}, synchronize_session=False)
+    )
+    subjects_updated = (
+        db.query(Subject)
+        .filter(Subject.instructor_id == teacher.id)
+        .update({Subject.instructor_id: replacement.id}, synchronize_session=False)
+    )
+    live_classes_updated = (
+        db.query(LiveClass)
+        .filter(LiveClass.teacher_id == teacher.id)
+        .update({LiveClass.teacher_id: replacement.id}, synchronize_session=False)
+    )
+    exams_updated = (
+        db.query(Exam)
+        .filter(Exam.teacher_id == teacher.id)
+        .update({Exam.teacher_id: replacement.id}, synchronize_session=False)
+    )
+    lesson_answers_updated = (
+        db.query(LessonAnswer)
+        .filter(LessonAnswer.teacher_id == teacher.id)
+        .update({LessonAnswer.teacher_id: replacement.id}, synchronize_session=False)
+    )
+
+    db.flush()
+
+    db.delete(teacher)
+    db.commit()
+
+    return TeacherReassignmentResult(
+        deleted_teacher_id=teacher_id,
+        reassigned_courses=courses_updated,
+        reassigned_subjects=subjects_updated,
+        reassigned_live_classes=live_classes_updated,
+        reassigned_exams=exams_updated,
+        reassigned_lesson_answers=lesson_answers_updated,
+    )
 @router.get("/health")
 def get_system_health(db: Session = Depends(get_db), _=Depends(require_role("admin"))):
     """Get system health status"""
