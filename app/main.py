@@ -26,6 +26,7 @@ def _get_allowed_origins() -> list[str]:
     "http://192.168.100.198:3000",
     "https://app.sevalla.com",
     "https://*.sevalla.com",
+    "https://osa-frontend-production.up.railway.app",
   ]
 
 
