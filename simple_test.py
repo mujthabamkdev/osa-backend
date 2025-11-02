@@ -35,10 +35,10 @@ async def test_backend():
                 course_details = response.json()
                 print(f"   Course: {course_details.get('title', 'N/A')}")
 
-            print("\n✅ Backend connectivity test successful!")
+            print("\nBackend connectivity test successful!")
 
         except Exception as e:
-            print(f"\n❌ Test failed: {e}")
+            print(f"\nTest failed: {e}")
             return False
 
     return True

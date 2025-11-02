@@ -16,7 +16,7 @@ def update_course_and_create_levels():
         course = db.query(Course).filter(Course.id == 1).first()
         if course:
             course.title = "Online Sharia"
-            print(f"✓ Updated course title to: {course.title}")
+            print(f"Updated course title to: {course.title}")
         else:
             print("Course with ID 1 not found")
             return
@@ -28,7 +28,7 @@ def update_course_and_create_levels():
                 db.query(Chapter.id).filter(Chapter.course_id == 1)
             )
         ).delete(synchronize_session=False)
-        print(f"✓ Deleted {progress_deleted} lesson progress records")
+        print(f"Deleted {progress_deleted} lesson progress records")
 
         # Delete quiz questions
         questions_deleted = db.query(QuizQuestion).filter(
@@ -40,7 +40,7 @@ def update_course_and_create_levels():
                 )
             )
         ).delete(synchronize_session=False)
-        print(f"✓ Deleted {questions_deleted} quiz questions")
+        print(f"Deleted {questions_deleted} quiz questions")
 
         # Delete quizzes
         quizzes_deleted = db.query(Quiz).filter(
@@ -48,17 +48,17 @@ def update_course_and_create_levels():
                 db.query(Chapter.id).filter(Chapter.course_id == 1)
             )
         ).delete(synchronize_session=False)
-        print(f"✓ Deleted {quizzes_deleted} quizzes")
+        print(f"Deleted {quizzes_deleted} quizzes")
 
         # Delete attachments
         attachments_deleted = db.query(Attachment).filter(Attachment.chapter_id.in_(
             db.query(Chapter.id).filter(Chapter.course_id == 1)
         )).delete(synchronize_session=False)
-        print(f"✓ Deleted {attachments_deleted} attachments")
+        print(f"Deleted {attachments_deleted} attachments")
 
         # Delete existing chapters
         chapters_deleted = db.query(Chapter).filter(Chapter.course_id == 1).delete()
-        print(f"✓ Deleted {chapters_deleted} existing chapters")
+        print(f"Deleted {chapters_deleted} existing chapters")
 
         # Create 5 new levels (Class 1-5)
         levels = [
@@ -79,20 +79,20 @@ def update_course_and_create_levels():
             db.add(chapter)
 
         db.commit()
-        print("✓ Created 5 new levels (Class 1-5)")
+        print("Created 5 new levels (Class 1-5)")
 
         # Verify the changes
         updated_course = db.query(Course).filter(Course.id == 1).first()
         chapters = db.query(Chapter).filter(Chapter.course_id == 1).order_by(Chapter.order).all()
 
-        print("\n📚 Course Structure:")
+        print("\nCourse Structure:")
         print(f"Course: {updated_course.title}")
         print("Levels:")
         for chapter in chapters:
             print(f"  {chapter.order}. {chapter.title} - {chapter.description}")
 
     except Exception as e:
-        print(f"❌ Error updating course: {e}")
+        print(f"Error updating course: {e}")
         db.rollback()
     finally:
         db.close()

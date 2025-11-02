@@ -197,7 +197,7 @@ def upgrade() -> None:
     batch_op.drop_constraint('fk_session_contents_session_id', type_='foreignkey')
     batch_op.drop_column('session_id')
 
-  print("✅ Database migration completed: Course hierarchy restructured")
+  print("Database migration completed: Course hierarchy restructured")
 
 
 def downgrade() -> None:
@@ -263,4 +263,4 @@ def downgrade() -> None:
   op.drop_index('ix_lessons_subject_id', table_name='lessons')
   op.drop_table('lessons')
 
-  print("✅ Database migration reversed")
+  print("Database migration reversed")

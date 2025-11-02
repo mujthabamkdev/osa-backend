@@ -1,5 +1,5 @@
 Log 02 2025
-# 🐍 Online Sharia Academy Backend
+# Online Sharia Academy Backend
 
 FastAPI-based REST API backend for the Online Sharia Academy platform, providing comprehensive Islamic education management with role-based access control.
 

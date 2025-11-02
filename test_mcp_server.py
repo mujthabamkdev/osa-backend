@@ -25,32 +25,32 @@ async def test_osa_connection():
         print(f"Raw response: {courses}")
 
         if courses and len(courses) > 0 and not courses[0].get('error'):
-            print(f"✅ Found {len(courses)} courses")
+            print(f"Found {len(courses)} courses")
             # Test getting course details
             course_id = courses[0].get('id', 1)
             print(f"\n2. Testing course details for course {course_id}...")
             course_details = await tools.get_course_details(course_id)
             print(f"Raw course details: {course_details}")
             if not course_details.get('error'):
-                print(f"✅ Course title: {course_details.get('title', 'N/A')}")
+                print(f"Course title: {course_details.get('title', 'N/A')}")
         else:
-            print("❌ No courses found or error in response")
+            print("No courses found or error in response")
 
         # Test student enrollments (assuming student ID 2 exists)
         print("\n3. Testing student enrollments...")
         enrollments = await tools.get_student_enrollments(2)
         print(f"Raw enrollments: {enrollments}")
         if enrollments and not enrollments[0].get('error'):
-            print(f"✅ Student 2 has {len(enrollments)} enrollments")
+            print(f"Student 2 has {len(enrollments)} enrollments")
         else:
-            print("❌ Error getting student enrollments")
+            print("Error getting student enrollments")
 
-        print("\n✅ OSA Backend connection successful!")
+        print("\nOSA Backend connection successful!")
         print("MCP Server is ready to use.")
         return True
 
     except Exception as e:
-        print(f"\n❌ Connection test failed: {e}")
+        print(f"\nConnection test failed: {e}")
         import traceback
         traceback.print_exc()
         print("Make sure your OSA backend is running on the configured URL")
