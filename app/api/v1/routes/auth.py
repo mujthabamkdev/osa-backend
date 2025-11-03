@@ -3,12 +3,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import Optional
+import logging
 
 from app.core.database import get_db
 from app.core.security import (verify_password, create_access_token,
                                get_password_hash)
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -26,12 +28,27 @@ class RegisterDTO(BaseModel):
 
 @router.post("/login", status_code=200)
 def login(dto: LoginDTO, db: Session = Depends(get_db)):
+    logger.info(f"Login attempt for email: {dto.email}")
     user = db.query(User).filter(User.email == dto.email).first()
-    if not user or not verify_password(dto.password, user.hashed_password):
+    
+    if not user:
+        logger.error(f"User not found: {dto.email}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid credentials")
+    
+    logger.info(f"User found: {user.email}, ID: {user.id}, Active: {user.is_active}")
+    logger.debug(f"Stored hash: {user.hashed_password[:30]}...")
+    
+    is_password_valid = verify_password(dto.password, user.hashed_password)
+    logger.info(f"Password verification result: {is_password_valid}")
+    
+    if not is_password_valid:
+        logger.error(f"Password verification failed for {dto.email}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid credentials")
 
     if not user.is_active:
+        logger.warning(f"Inactive user attempted login: {dto.email}")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Account pending admin approval")
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -335,7 +335,7 @@ def get_pending_users(
     ]
 
 
-@router.post("/users/{user_id}/approve", response_model=StudentAdminResponse | ParentAdminResponse)
+@router.post("/users/{user_id}/approve", response_model=Union[StudentAdminResponse, ParentAdminResponse])
 def approve_user(
     user_id: int,
     payload: ApproveUserPayload,
